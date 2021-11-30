@@ -6,12 +6,17 @@ from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.feature_selection import SelectFromModel
 from sklearn.metrics import accuracy_score, r2_score, roc_auc_score
+from sklearn.metrics import confusion_matrix, multilabel_confusion_matrix
+from sklearn.metrics import classification_report
+
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.model_selection import cross_validate, train_test_split
 from sklearn.model_selection import KFold
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+
 import sys
 import matplotlib.pyplot as plt
+
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 
 trainfile = sys.argv[1] if len(sys.argv) > 1 else "NSL-KDD/KDDTrain+.txt"
 testfile = sys.argv[2] if len(sys.argv) > 2 else "NSL-KDD/KDDTest+.txt"
@@ -19,14 +24,9 @@ testfile = sys.argv[2] if len(sys.argv) > 2 else "NSL-KDD/KDDTest+.txt"
 def info(title, test, pred):
     print(title, "=" * 10)
     try:
-        print("r2_score", r2_score(test, pred))
+        print("confusion_matrix, tn, fp, fn, tp = ", multilabel_confusion_matrix(test, pred))
     except: pass
-    try:
-        print("accuracy_score", accuracy_score(test, pred))
-    except: pass
-    try:
-        print("roc_auc_score", roc_auc_score(test, pred))
-    except: pass
+    print("classification_report", classification_report(test, pred))
 
 class DDoSDetector:
     def __init__(self):
@@ -126,7 +126,7 @@ class DDoSDetector:
             ]
 
         # normal
-        dos_attacks = ([
+        dos_attacks = (
             'apache2'
             ,'back'
             ,'land'
@@ -137,8 +137,18 @@ class DDoSDetector:
             ,'smurf'
             ,'teardrop'
             ,'udpstorm'
-            ,'worm'])
+            ,'worm')
+        self.__attack_maps = {k:1 for k in dos_attacks}
 
+
+    def map_attack(self, v):
+        if v in self.__attack_maps:
+            return 1
+        if v is None:
+            return 0
+        if v == 'normal':
+            return 0
+        return 2
 
     def trained(self):
         return self.__trained
@@ -146,8 +156,7 @@ class DDoSDetector:
     def load_train(self, train_file, test_file):
         df = pd.read_csv(train_file)
         df.columns = self.__columns[:]
-        # attack_map = df.attack.apply(self.map_attack)
-        # df['attack'] = attack_map
+        # y = df.attack.apply(self.map_attack)
         df_test = pd.read_csv(test_file)
         df_test.columns = self.__columns[:]
         df = df[self.__features__]
@@ -155,10 +164,9 @@ class DDoSDetector:
 
         df_all = df.append(df_test, ignore_index=True)
 
-        attack = df.iloc[:, -1:]
-        tfy = OneHotEncoder(handle_unknown='error',sparse=False)
+        tfy = OneHotEncoder(handle_unknown='ignore',sparse=False)
         self.tfy = tfy.fit(df_all.iloc[:, -1:])
-        y = self.tfy.transform(attack)
+        y = self.tfy.transform(df.iloc[:, -1:])
 
         df = df.drop(columns=['attack'])
         df_all = df_all.drop(columns=['attack'])
@@ -179,41 +187,40 @@ class DDoSDetector:
         df = pd.read_csv(test_file)
         df.columns = self.__columns[:]
         df = df[self.__features__]
+        # y = df.attack.apply(self.map_attack)
 
+        attack = df['attack']
         y = self.tfy.transform(df.iloc[:, -1:])
+        X = self.tfx.transform(df.drop(columns=['attack']))
 
-        df = df.drop(columns=['attack'])
-        X = self.tfx.transform(df)
+        return X, y, attack
 
-        return X, y
-
-    def baseRFR(self):
-        return RandomForestClassifier(n_jobs=-1,
+    def baseRFC(self):
+        rf = RandomForestClassifier(n_jobs=-1,
                 n_estimators=40,
                 random_state=42,
                 # oob_score=True,
                 max_features="sqrt")
+        return rf
 
     def train(self, X, y):
-        regressor = self.baseRFR()
+        regressor = self.baseRFC()
 
-        if True:
-            # scores = cross_validate(regressor, X, y, cv=10, return_estimator=True)
-            # print("scores", scores)
-            X_train, X_test, y_train, y_test = train_test_split(X, y,
-                    random_state=0, test_size=0.3)
-            # regressor.fit(X_train, y_train)
-            regressor.fit(X, y)
-            y_pred_test = regressor.predict(X_test)
-            # importances = list(regressor.feature_importances_)
-            # feature_list = self.tfx.get_feature_names_out()
-            # plt.bar(height=importances, x=feature_list)
-            # plt.show()
-            # feature_importances = [(feature, importance) for feature, importance in zip(feature_list, importances)]
-            # feature_importances = sorted(feature_importances, key = lambda x: x[1], reverse = True)
-            # [print('Variable: {:20} Importance: {}'.format(*pair)) for pair in feature_importances]
-        else:
-            regressor.fit(X, y)
+        # scores = cross_validate(regressor, X, y, cv=10, return_estimator=True)
+        # print("scores", scores)
+        X_train, X_test, y_train, y_test = train_test_split(X, y,
+                random_state=0, test_size=0.3)
+        regressor.fit(X_train, y_train)
+        # regressor.fit(X, y)
+        y_pred_test = regressor.predict(X_test)
+        # info("train", y_test, y_pred_test)
+        # importances = list(regressor.feature_importances_)
+        # feature_list = self.tfx.get_feature_names_out()
+        # plt.bar(height=importances, x=feature_list)
+        # plt.show()
+        # feature_importances = [(feature, importance) for feature, importance in zip(feature_list, importances)]
+        # feature_importances = sorted(feature_importances, key = lambda x: x[1], reverse = True)
+        # [print('Variable: {:20} Importance: {}'.format(*pair)) for pair in feature_importances]
         self.regressor = regressor
         self.__trained = True
 
@@ -274,8 +281,14 @@ if not detector.trained():
     # info("test", y_test, y_pred_test)
 
     detector.train(X_train, y_train)
-    # detector.save_model()
+    detector.save_model()
 
-X_test, y_test = detector.load_test(testfile)
+print(detector.tfy.categories_)
+X_test, y_test, y_label = detector.load_test(testfile)
 y_pred_test = detector.predict(X_test)
-info("test", y_test, y_pred_test)
+y_pred_label = detector.tfy.inverse_transform(y_pred_test)
+print('inverse', y_pred_label)
+y_label_v = y_label.apply(detector.map_attack)
+y_pred_label_v = pd.Series(y_pred_label[:,0]).apply(detector.map_attack)
+# pd.DataFrame({'acu': y_label_v, 'predict': y_pred_label_v}).to_csv("pred.csv")
+info("test", y_label_v, y_pred_label_v)
