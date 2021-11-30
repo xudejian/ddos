@@ -126,29 +126,34 @@ class DDoSDetector:
             ]
 
         # normal
-        dos_attacks = (
-            'apache2'
-            ,'back'
-            ,'land'
-            ,'neptune'
-            ,'mailbomb'
-            ,'pod'
-            ,'processtable'
-            ,'smurf'
-            ,'teardrop'
-            ,'udpstorm'
-            ,'worm')
-        self.__attack_maps = {k:1 for k in dos_attacks}
+        dos_attacks = ['apache2','back','land','neptune','mailbomb','pod',
+                'processtable','smurf','teardrop','udpstorm','worm']
+        probe_attacks = ['ipsweep','mscan','nmap','portsweep','saint','satan']
+
+        U2R_attacks = ['buffer_overflow','loadmodule','perl','ps',
+                'rootkit','sqlattack','xterm']
+
+        R2L_attacks = ['ftp_write', 'guess_passwd', 'http_tunnel', 'imap',
+                'httptunnel', 'multihop', 'named', 'phf', 'sendmail',
+                'snmpgetattack', 'snmpguess', 'spy', 'warezclient',
+                'warezmaster', 'xlock', 'xsnoop']
+
+        attack_labels = ['Normal','DoS','Probe','U2R','R2L']
+        self.__attack_maps = {'normal':0}
+        for k in dos_attacks:
+            self.__attack_maps[k] = 1
+        for k in R2L_attacks:
+            self.__attack_maps[k] = 2
+        for k in U2R_attacks:
+            self.__attack_maps[k] = 3
+        for k in probe_attacks:
+            self.__attack_maps[k] = 4
 
 
     def map_attack(self, v):
-        if v in self.__attack_maps:
-            return 1
         if v is None:
-            return 0
-        if v == 'normal':
-            return 0
-        return 2
+            return 5
+        return self.__attack_maps[v]
 
     def trained(self):
         return self.__trained
@@ -189,7 +194,7 @@ class DDoSDetector:
         df = df[self.__features__]
         # y = df.attack.apply(self.map_attack)
 
-        attack = df['attack']
+        attack = df.attack
         y = self.tfy.transform(df.iloc[:, -1:])
         X = self.tfx.transform(df.drop(columns=['attack']))
 
@@ -287,8 +292,19 @@ print(detector.tfy.categories_)
 X_test, y_test, y_label = detector.load_test(testfile)
 y_pred_test = detector.predict(X_test)
 y_pred_label = detector.tfy.inverse_transform(y_pred_test)
+y_pred_label = y_pred_label[:,0]
 print('inverse', y_pred_label)
 y_label_v = y_label.apply(detector.map_attack)
-y_pred_label_v = pd.Series(y_pred_label[:,0]).apply(detector.map_attack)
-# pd.DataFrame({'acu': y_label_v, 'predict': y_pred_label_v}).to_csv("pred.csv")
+y_pred_label_v = pd.Series(y_pred_label).apply(detector.map_attack)
+print(y_pred_label_v)
+df = pd.DataFrame({
+    'aculabel':y_label,
+    'acuv': y_label_v,
+    'predictlabel':y_pred_label,
+    'predict': y_pred_label_v
+    })
+# .to_csv("pred.csv")
 info("test", y_label_v, y_pred_label_v)
+
+# df['predict'].hist()
+# plt.show()
