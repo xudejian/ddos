@@ -3,10 +3,10 @@ import numpy as np
 import os
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectFromModel
-from sklearn.metrics import accuracy_score, r2_score, roc_auc_score
-from sklearn.metrics import confusion_matrix, multilabel_confusion_matrix
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import confusion_matrix
 from sklearn.metrics import classification_report
 
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
@@ -16,7 +16,7 @@ from sklearn.model_selection import KFold
 import sys
 import matplotlib.pyplot as plt
 
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder
 
 trainfile = sys.argv[1] if len(sys.argv) > 1 else "NSL-KDD/KDDTrain+.txt"
 testfile = sys.argv[2] if len(sys.argv) > 2 else "NSL-KDD/KDDTest+.txt"
@@ -25,7 +25,7 @@ def info(title, test, pred):
     print(title, "=" * 10)
     print("accuracy_score, ", accuracy_score(test, pred))
     try:
-        print("confusion_matrix, tn, fp, fn, tp = ", multilabel_confusion_matrix(test, pred))
+        print("confusion_matrix, tn, fp, fn, tp = ", confusion_matrix(test, pred))
     except: pass
     print("classification_report", classification_report(test, pred))
 
@@ -111,14 +111,14 @@ class DDoSDetector:
             ,'duration' #bad
             ,'is_guest_login' #bad
             ,'num_root' #bad
-            ,'num_failed_logins' #small bad
             ,'num_file_creations' #bad
             ,'root_shell' #bad
             ,'land' #bad
+            ,'su_attempted' #small bad
             ,'num_access_files' #bad
             ,'num_shells' #small bad
-            ,'su_attempted' #small bad
             ,'urgent' #bad
+            ,'num_failed_logins' #small bad
             ,'is_host_login' #bad
             ,'num_outbound_cmds' #bad
             ,'attack'])
@@ -149,6 +149,7 @@ class DDoSDetector:
             self.__attack_maps[k] = 0 #3
         for k in probe_attacks:
             self.__attack_maps[k] = 0 #4
+        print(len(self.__columns))
 
 
     def map_attack(self, v):
@@ -162,17 +163,13 @@ class DDoSDetector:
     def load_train(self, train_file, test_file):
         df = pd.read_csv(train_file)
         df.columns = self.__columns[:]
-        # y = df.attack.apply(self.map_attack)
+        y = df.attack.apply(self.map_attack)
         df_test = pd.read_csv(test_file)
         df_test.columns = self.__columns[:]
         df = df[self.__features__]
         df_test = df_test[self.__features__]
 
         df_all = df.append(df_test, ignore_index=True)
-
-        tfy = OneHotEncoder(handle_unknown='ignore',sparse=False)
-        self.tfy = tfy.fit(df_all.iloc[:, -1:])
-        y = self.tfy.transform(df.iloc[:, -1:])
 
         df = df.drop(columns=['attack'])
         df_all = df_all.drop(columns=['attack'])
@@ -193,43 +190,41 @@ class DDoSDetector:
         df = pd.read_csv(test_file)
         df.columns = self.__columns[:]
         df = df[self.__features__]
-        # y = df.attack.apply(self.map_attack)
+        y = df.attack.apply(self.map_attack)
 
-        attack = df.attack
-        y = self.tfy.transform(df.iloc[:, -1:])
         X = self.tfx.transform(df.drop(columns=['attack']))
 
-        return X, y, attack
+        return X, y
 
     def baseRFC(self):
         rf = RandomForestClassifier(
                 # oob_score=True,
                 n_jobs=-1,
-                n_estimators=49,
+                n_estimators=35,
                 random_state=42,
                 max_features="sqrt"
                 )
         return rf
 
     def train(self, X, y):
-        core = self.baseRFC()
+        c = self.baseRFC()
 
-        # scores = cross_validate(core, X, y, cv=10, return_estimator=True)
+        # scores = cross_validate(c, X, y, cv=10, return_estimator=True)
         # print("scores", scores)
         X_train, X_test, y_train, y_test = train_test_split(X, y,
                 random_state=0, test_size=0.3)
-        core.fit(X_train, y_train)
-        # core.fit(X, y)
-        y_pred_test = core.predict(X_test)
+        c.fit(X_train, y_train)
+        # c.fit(X, y)
+        y_pred_test = c.predict(X_test)
         info("train", y_test, y_pred_test)
-        # importances = list(core.feature_importances_)
+        # importances = list(c.feature_importances_)
         # feature_list = self.tfx.get_feature_names_out()
         # plt.bar(height=importances, x=feature_list)
         # plt.show()
         # feature_importances = [(feature, importance) for feature, importance in zip(feature_list, importances)]
         # feature_importances = sorted(feature_importances, key = lambda x: x[1], reverse = True)
         # [print('Variable: {:20} Importance: {}'.format(*pair)) for pair in feature_importances]
-        self.core = core
+        self.core = c
         self.__trained = True
 
 
@@ -255,64 +250,42 @@ class DDoSDetector:
                 random_state=42,
                 )
         param_grid = {
-                "n_estimators"      : [10, 20, 30, 40, 50],
+                "n_estimators"      : range(30,60),
                 "max_features"      : ["sqrt"],
                 }
 
         grid = GridSearchCV(estimator, param_grid, n_jobs=-1, cv=10)
         grid.fit(X_train, y_train)
+        print(grid.best_score_ , grid.best_params_)
         return grid.best_estimator_, grid.best_score_ , grid.best_params_
 
-    def FeaturesSelect(self, X_train, y_train):
-        sel = SelectFromModel(self.baseRFR())
+    def FeaturesSelect(self, X_train, y_train, X_test, y_test):
+        sel = SelectFromModel(self.baseRFC())
         sel.fit(X_train, y_train)
         supports = sel.get_support()
         print(supports)
         print(len(supports))
         feature_list = self.tfx.get_feature_names_out()
         print(feature_list[supports])
+
+        y_pred_test = sel.estimator_.predict(X_test)
+        info("select", y_test, y_pred_test)
+
         pd.Series(sel.estimator_.feature_importances_.ravel()).hist()
         plt.show()
 
 detector = DDoSDetector()
-# detector.load_model()
-if not detector.trained():
-    X_train, y_train = detector.load_train(trainfile, testfile)
-    # detector.FeaturesSelect(X_train, y_train)
+X_train, y_train = detector.load_train(trainfile, testfile)
+X_test, y_test = detector.load_test(testfile)
+# est, bs, bp = detector.GridSearch(X_train, y_train)
+# y_pred_test = est.predict(X_test)
+# info("GridSearch", y_test, y_pred_test)
 
-    # X_test, y_test = detector.load_test(testfile)
-    # best_estimator, best_score, best_params = detector.GridSearch(X_train, y_train)
-    # print(best_score)
-    # print(best_params)
-    # y_pred_test = best_estimator.predict(X_test)
-    # info("test", y_test, y_pred_test)
+# detector.FeaturesSelect(X_train, y_train, X_test, y_test)
+detector.train(X_train, y_train)
 
-    detector.train(X_train, y_train)
-    detector.save_model()
-
-# print(detector.tfy.categories_)
-X_test, y_test, y_label = detector.load_test(testfile)
 y_pred_test = detector.predict(X_test)
-# print('accuracy', accuracy_score(y_test, y_pred_test))
-y_pred_label = detector.tfy.inverse_transform(y_pred_test)
-y_pred_label = y_pred_label[:,0]
-# print('inverse', y_pred_label)
-y_label_v = y_label.apply(detector.map_attack)
-y_pred_label_v = pd.Series(y_pred_label).apply(detector.map_attack)
-# print(y_pred_label_v)
-df = pd.DataFrame({
-    'aculabel':y_label,
-    'acuv': y_label_v,
-    'predictlabel':y_pred_label,
-    'predict': y_pred_label_v
-    })
-# print(df[df.predict==5].head())
-# print(df[df.predict==5].count())
-# print(df.count())
-# print(y_pred_test[2])
-# df = df[df.aculabel!=df.predictlabel]
-# df.to_csv("pred.csv")
-info("test", y_label_v, y_pred_label_v)
+info("test", y_test, y_pred_test)
 
 # df['predict'].hist()
 # plt.show()
